@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Quizmaatje</title>
+<meta name="theme-color" content="#14161c">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Quizmaatje">
+<style>
+  :root {
+    --bg: #14161c; --card: #1e2129; --card2: #262a34; --line: #323744;
+    --text: #eef0f4; --muted: #9aa1b1; --accent: #7c9cff; --good: #4fd18b; --bad: #ff6b6b;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 640px; margin: 0 auto;
+    padding: calc(16px + env(safe-area-inset-top)) 16px calc(96px + env(safe-area-inset-bottom)); }
+  h1 { font-size: 24px; margin: 4px 0 16px; }
+  h2 { font-size: 18px; margin: 20px 0 8px; }
+  p { margin: 6px 0; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .card { background: var(--card); border-radius: var(--radius); padding: 16px; margin: 12px 0; }
+  button, .btn { display: block; width: 100%; border: 0; border-radius: 12px; padding: 14px 16px;
+    font: inherit; font-weight: 600; background: var(--accent); color: #0b0d12; cursor: pointer; text-align: center; }
+  button.secondary { background: var(--card2); color: var(--text); }
+  button.danger { background: transparent; color: var(--bad); border: 1px solid var(--bad); }
+  button:disabled { opacity: .5; }
+  button + button { margin-top: 10px; }
+  input, textarea, select { width: 100%; background: var(--card2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px; font: inherit; }
+  textarea { min-height: 180px; resize: vertical; }
+  label { display: block; font-size: 14px; color: var(--muted); margin: 14px 0 6px; }
+  .opt { text-align: left; background: var(--card2); color: var(--text); font-weight: 500; border: 2px solid transparent; }
+  .opt.correct { border-color: var(--good); background: #1d3a2b; }
+  .opt.wrong { border-color: var(--bad); background: #3d2024; }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .row > * { flex: 1; }
+  .pill { display: inline-block; font-size: 12px; padding: 3px 9px; border-radius: 99px; background: var(--card2); color: var(--muted); }
+  .bar { height: 6px; background: var(--card2); border-radius: 99px; overflow: hidden; margin-top: 8px; }
+  .bar > div { height: 100%; background: var(--accent); }
+  .topic { display: flex; justify-content: space-between; align-items: center; gap: 12px; cursor: pointer; }
+  .score { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .good { color: var(--good); } .bad { color: var(--bad); }
+  ul { padding-left: 20px; margin: 6px 0; }
+  li { margin: 4px 0; }
+  .feedback { margin-top: 12px; padding: 12px; border-radius: 10px; background: var(--card2); }
+  nav { position: fixed; bottom: 0; left: 0; right: 0; display: flex; background: #181a21ee;
+    backdrop-filter: blur(10px); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); }
+  nav button { background: none; color: var(--muted); border-radius: 0; padding: 12px 4px 14px; font-weight: 500; font-size: 13px; margin: 0; }
+  nav button.active { color: var(--accent); }
+  nav button span { display: block; font-size: 20px; line-height: 1.2; }
+  .spinner { width: 28px; height: 28px; border: 3px solid var(--line); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin 0.8s linear infinite; margin: 8px auto; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .toast { position: fixed; left: 16px; right: 16px; bottom: calc(84px + env(safe-area-inset-bottom)); max-width: 608px; margin: 0 auto;
+    background: var(--card2); border: 1px solid var(--line); padding: 12px 14px; border-radius: 12px; z-index: 10; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<nav>
+  <button data-tab="quiz"><span>🎯</span>Oefenen</button>
+  <button data-tab="topics"><span>📚</span>Onderwerpen</button>
+  <button data-tab="progress"><span>🧠</span>Voortgang</button>
+  <button data-tab="settings"><span>⚙️</span>Instellingen</button>
+</nav>
+<div id="toast" class="toast hidden"></div>
+
+<script>
+/* ============ Opslag (alles lokaal op je telefoon) ============ */
+const KEY = 'quizmaatje-v1';
+const DEFAULT_MODEL = 'gemini-2.5-flash';
+let S = load();
+
+function load() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) return Object.assign(blank(), JSON.parse(raw));
+  } catch (e) {}
+  return blank();
+}
+function blank() { return { apiKey: '', model: DEFAULT_MODEL, autoAdapt: true, topics: [], questions: [], concepts: {} }; }
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(S)); }
+  catch (e) { toast('Opslaan mislukt: ' + e.message); }
+}
+const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+
+/* ============ Herhalen (Leitner-systeem) ============
+   Box 1 = net fout / nieuw, box 5 = goed beheerst.
+   Goed → een box omhoog en later terug. Fout → terug naar box 1, komt meteen weer. */
+const DAY = 86400000;
+const INTERVAL = [0, 0, 1, 3, 7, 21]; // dagen per box (index = box)
+
+function grade(q, ok) {
+  q.seen = (q.seen || 0) + 1;
+  if (ok) { q.right = (q.right || 0) + 1; q.box = Math.min(5, (q.box || 1) + 1); }
+  else { q.wrong = (q.wrong || 0) + 1; q.box = 1; q.lastWrong = Date.now(); }
+  q.due = Date.now() + INTERVAL[q.box] * DAY;
+  trackConcept(q, ok);
+  save();
+}
+
+/* ============ Lerend profiel: per begrip bijhouden wat je wel/niet beheerst ============ */
+const conceptKey = q => q.topicId + '::' + String(q.concept || '').toLowerCase().trim();
+
+function trackConcept(q, ok) {
+  if (!q.concept) return;
+  const k = conceptKey(q);
+  const c = S.concepts[k] || (S.concepts[k] = { key: k, topicId: q.topicId, label: q.concept, right: 0, wrong: 0, streak: 0, last: 0 });
+  if (ok) { c.right++; c.streak++; } else { c.wrong++; c.streak = 0; c.lastWrong = Date.now(); }
+  c.last = Date.now();
+}
+
+// 0 = helemaal niet, 1 = beheerst. Telt de verhouding goed/fout én je huidige reeks goede antwoorden.
+function conceptMastery(c) {
+  const n = c.right + c.wrong;
+  if (!n) return 0.5;
+  return Math.min(1, (c.right / (n + 1)) * 0.6 + (Math.min(c.streak, 3) / 3) * 0.4);
+}
+
+function weakConcepts(topicId) {
+  return Object.values(S.concepts)
+    .filter(c => (!topicId || c.topicId === topicId) && c.wrong > 0 && S.topics.some(t => t.id === c.topicId))
+    .map(c => ({ c, m: conceptMastery(c) }))
+    .filter(x => x.m < 0.8)
+    .sort((a, b) => a.m - b.m);
+}
+function strongConcepts() {
+  return Object.values(S.concepts).filter(c => c.streak >= 3 && S.topics.some(t => t.id === c.topicId))
+    .sort((a, b) => b.streak - a.streak);
+}
+
+function pickSession(topicId, n = 10, weakOnly = false) {
+  const now = Date.now();
+  const weakKeys = new Set(weakConcepts(topicId).map(x => x.c.key));
+  let pool = S.questions.filter(q => !topicId || q.topicId === topicId);
+  const cm = q => { const c = S.concepts[conceptKey(q)]; return c ? conceptMastery(c) : 0.5; };
+  // Hoe lager, hoe eerder aan de beurt: lage box, vaak fout, nieuw, en zwak begrip gaan voor
+  const weakness = q => (q.box || 1) * 10 - (q.wrong || 0) * 3 + (q.seen ? 0 : 5) + cm(q) * 8;
+  if (weakOnly) {
+    return shuffle(pool.filter(q => weakKeys.has(conceptKey(q))).sort((a, b) => weakness(a) - weakness(b)).slice(0, n));
+  }
+  const due = pool.filter(q => (q.due || 0) <= now).sort((a, b) => weakness(a) - weakness(b));
+  // Ook als ze nog niet "due" zijn: een paar vragen over je zwakke begrippen komen altijd mee
+  const weakExtra = shuffle(pool.filter(q => (q.due || 0) > now && weakKeys.has(conceptKey(q)))).slice(0, 3);
+  const rest = shuffle(pool.filter(q => (q.due || 0) > now && !weakExtra.includes(q)));
+  return shuffle([...due.slice(0, n - weakExtra.length), ...weakExtra, ...rest].slice(0, n));
+}
+function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+
+function topicStats(topicId) {
+  const qs = S.questions.filter(q => q.topicId === topicId);
+  const right = qs.reduce((s, q) => s + (q.right || 0), 0);
+  const wrong = qs.reduce((s, q) => s + (q.wrong || 0), 0);
+  const mastery = qs.length ? qs.reduce((s, q) => s + ((q.box || 1) - 1), 0) / (qs.length * 4) : 0;
+  const due = qs.filter(q => (q.due || 0) <= Date.now()).length;
+  return { count: qs.length, right, wrong, mastery, due };
+}
+
+/* ============ Gemini (gratis API-sleutel via Google AI Studio) ============ */
+const QUESTION_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    question: { type: 'STRING' },
+    options: { type: 'ARRAY', items: { type: 'STRING' } },
+    correctIndex: { type: 'INTEGER' },
+    explanation: { type: 'STRING' },
+    concept: { type: 'STRING' }
+  },
+  required: ['question', 'options', 'correctIndex', 'explanation', 'concept']
+};
+
+async function gemini(parts, schema) {
+  if (!S.apiKey) throw new Error('Vul eerst je Gemini API-sleutel in bij Instellingen.');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(S.model || DEFAULT_MODEL)}:generateContent`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': S.apiKey },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts }],
+      generationConfig: { responseMimeType: 'application/json', responseSchema: schema, temperature: 0.7 }
+    })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (res.status === 429) throw new Error('Gratis limiet even bereikt. Wacht een minuutje en probeer opnieuw.');
+    throw new Error((data.error && data.error.message) || ('Fout ' + res.status));
+  }
+  const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+  try { return JSON.parse(text); } catch (e) { throw new Error('AI gaf geen geldig antwoord, probeer opnieuw.'); }
+}
+
+const QUESTION_RULES = `Regels voor vragen:
+- Meerkeuze met precies 4 opties, één juist antwoord (correctIndex 0-3).
+- Toets begrip en toepassing, niet alleen letterlijk overschrijven. Mix: definities, "waarom", toepassen op een situatie, verschillen tussen begrippen.
+- Foute opties moeten geloofwaardig zijn (veelgemaakte denkfouten).
+- Varieer de positie van het juiste antwoord.
+- "explanation": 1-3 zinnen waarom het juiste antwoord klopt en waarom de verleiding fout is.
+- "concept": kort label (2-4 woorden) van het onderliggende begrip.
+- Schrijf in dezelfde taal als de notities.`;
+
+async function processNotes(title, text, file) {
+  const parts = [{ text:
+`Je bent een studiecoach. Hieronder staan studienotities van de gebruiker${file ? ' (als bijlage en/of tekst)' : ''}.
+1. Maak een korte samenvatting (3-5 zinnen).
+2. Geef de belangrijkste kernpunten (5-10 bullets).
+3. "enrichment": vul de notities aan met wat ontbreekt of verduidelijking nodig heeft — extra uitleg, voorbeelden, verbanden of veelgemaakte fouten (4-8 bullets). Blijf feitelijk; verzin niets wat je niet zeker weet.
+4. Maak 12 oefenvragen over notities én aanvulling.
+${QUESTION_RULES}
+Stel ook een korte, duidelijke titel voor.
+
+Titel van gebruiker: ${title || '(geen)'}
+Notities:
+${text || '(zie bijlage)'}` }];
+  if (file) parts.push({ inline_data: { mime_type: file.type, data: file.data } });
+  return gemini(parts, {
+    type: 'OBJECT',
+    properties: {
+      title: { type: 'STRING' },
+      summary: { type: 'STRING' },
+      keyPoints: { type: 'ARRAY', items: { type: 'STRING' } },
+      enrichment: { type: 'ARRAY', items: { type: 'STRING' } },
+      questions: { type: 'ARRAY', items: QUESTION_SCHEMA }
+    },
+    required: ['title', 'summary', 'keyPoints', 'enrichment', 'questions']
+  });
+}
+
+const TOPIC_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    title: { type: 'STRING' },
+    summary: { type: 'STRING' },
+    keyPoints: { type: 'ARRAY', items: { type: 'STRING' } },
+    enrichment: { type: 'ARRAY', items: { type: 'STRING' } },
+    questions: { type: 'ARRAY', items: QUESTION_SCHEMA }
+  },
+  required: ['title', 'summary', 'keyPoints', 'enrichment', 'questions']
+};
+
+// Quiz over een onderwerp naar keuze, zonder eigen notities
+async function processSubject(subject, level, focus) {
+  return gemini([{ text:
+`Je bent een studiecoach. De gebruiker wil een quiz over: "${subject}".
+Niveau: ${level}. ${focus ? 'Extra focus/context van de gebruiker: ' + focus : ''}
+1. "summary": schrijf een beknopte uitleg van het onderwerp (4-6 zinnen) als studiestof.
+2. "keyPoints": de 6-10 belangrijkste dingen die je moet weten.
+3. "enrichment": 4-6 praktijkvoorbeelden, ezelsbruggetjes of veelgemaakte fouten.
+4. 12 oefenvragen passend bij het niveau. Blijf feitelijk; verzin niets wat je niet zeker weet.
+${QUESTION_RULES}
+Schrijf in het Nederlands, tenzij het onderwerp duidelijk Engelstalig vakjargon vraagt (begrippen mogen Engels blijven).
+"title": korte titel voor het onderwerp.` }], TOPIC_SCHEMA);
+}
+
+const conceptHint = topicId => {
+  const labels = [...new Set(S.questions.filter(q => q.topicId === topicId).map(q => q.concept).filter(Boolean))].slice(0, 40);
+  return labels.length ? `Gebruik waar het past EXACT een van deze bestaande begrip-labels (zodat voortgang per begrip klopt): ${labels.join(', ')}` : '';
+};
+
+// concepts = lijst begrippen om op te focussen (lerend vermogen), of leeg voor "gewoon meer vragen"
+async function generateQuestions(topic, concepts = [], count = 6) {
+  const existing = S.questions.filter(q => q.topicId === topic.id);
+  let focus = 'Maak nieuwe vragen over onderdelen die nog weinig getoetst zijn.';
+  if (concepts.length) {
+    const labels = concepts.map(c => c.label.toLowerCase().trim());
+    const missed = existing.filter(q => q.wrong > 0 && labels.includes(String(q.concept).toLowerCase().trim())).slice(0, 8);
+    focus = `De gebruiker heeft moeite met deze begrippen: ${concepts.map(c => c.label).join(', ')}.
+Hier ging het mis:
+${missed.map(q => `- [${q.concept}] ${q.question} (juist: ${q.options[q.correctIndex]})`).join('\n')}
+Maak nieuwe vragen die PRECIES deze begrippen toetsen, vanuit een andere invalshoek (andere situatie, omgekeerde vraag, vergelijking met een verwant begrip), zodat hij het echt gaat begrijpen. Gebruik voor "concept" exact deze labels.`;
+  }
+  const out = await gemini([{ text:
+`Je bent een studiecoach. Onderwerp: ${topic.title}
+Samenvatting: ${topic.summary}
+Kernpunten: ${(topic.keyPoints || []).join(' | ')}
+Aanvulling: ${(topic.enrichment || []).join(' | ')}
+Originele notities (ingekort): ${(topic.notes || '').slice(0, 6000)}
+
+${focus}
+Herhaal deze bestaande vragen NIET letterlijk: ${existing.slice(-30).map(q => q.question).join(' || ')}
+
+Maak ${count} nieuwe vragen.
+${QUESTION_RULES}
+${concepts.length ? '' : conceptHint(topic.id)}` }], { type: 'OBJECT', properties: { questions: { type: 'ARRAY', items: QUESTION_SCHEMA } }, required: ['questions'] });
+  return addQuestions(topic.id, out.questions);
+}
+
+async function explainConcept(c) {
+  const t = S.topics.find(x => x.id === c.topicId);
+  const missed = S.questions.filter(q => conceptKey(q) === c.key && q.wrong > 0).slice(0, 3);
+  const out = await gemini([{ text:
+`Je bent een geduldige studiecoach. De gebruiker vindt het begrip "${c.label}" lastig (onderwerp: ${t ? t.title : ''}).
+Context: ${t ? t.summary : ''}
+Hier ging het mis: ${missed.map(q => `${q.question} (juist: ${q.options[q.correctIndex]})`).join(' || ')}
+Leg het begrip helder uit in maximaal 120 woorden: wat het is, één concreet voorbeeld, en de denkfout die hij waarschijnlijk maakt. Sluit af met een kort ezelsbruggetje. Zelfde taal als het onderwerp.` }],
+    { type: 'OBJECT', properties: { explanation: { type: 'STRING' } }, required: ['explanation'] });
+  c.explain = out.explanation; save();
+  return out.explanation;
+}
+
+// Lerend vermogen: na een sessie automatisch nieuwe vragen maken voor begrippen die blijven misgaan
+async function autoAdapt(missed) {
+  if (!S.autoAdapt || !S.apiKey) return [];
+  const byTopic = {};
+  for (const q of missed) {
+    const c = S.concepts[conceptKey(q)];
+    // Pas ingrijpen als een begrip minstens 2x fout ging en er sinds de vorige keer nieuwe fouten zijn
+    if (!c || c.wrong < 2 || c.wrong <= (c.remedWrong || 0)) continue;
+    (byTopic[c.topicId] = byTopic[c.topicId] || new Map()).set(c.key, c);
+  }
+  const done = [];
+  for (const [topicId, map] of Object.entries(byTopic).slice(0, 2)) {
+    const topic = S.topics.find(t => t.id === topicId);
+    const concepts = [...map.values()].slice(0, 4);
+    try {
+      const n = await generateQuestions(topic, concepts, 4);
+      concepts.forEach(c => { c.remedWrong = c.wrong; c.remedAt = Date.now(); });
+      save();
+      done.push({ topic: topic.title, labels: concepts.map(c => c.label), n });
+    } catch (e) { done.push({ topic: topic.title, error: e.message }); }
+  }
+  return done;
+}
+
+function addQuestions(topicId, list) {
+  let n = 0;
+  for (const q of list || []) {
+    if (!q.question || !Array.isArray(q.options) || q.options.length < 2) continue;
+    const ci = Math.max(0, Math.min(q.options.length - 1, q.correctIndex | 0));
+    S.questions.push({ id: uid(), topicId, question: q.question, options: q.options, correctIndex: ci,
+      explanation: q.explanation || '', concept: q.concept || '', box: 1, due: 0, right: 0, wrong: 0, seen: 0 });
+    n++;
+  }
+  save();
+  return n;
+}
+
+/* ============ UI ============ */
+const app = document.getElementById('app');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+let tab = 'quiz';
+let session = null;
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.remove('hidden');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('hidden'), 4000);
+}
+function go(t) { tab = t; session = (t === 'quiz') ? session : null; render(); window.scrollTo(0, 0); }
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => { session = null; go(b.dataset.tab); });
+
+function render() {
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab.split(':')[0]));
+  if (tab === 'quiz') return session ? renderQuestion() : renderQuizHome();
+  if (tab === 'topics') return renderTopics();
+  if (tab === 'add') return renderAdd('notes');
+  if (tab === 'addai') return renderAdd('ai');
+  if (tab === 'progress') return renderProgress();
+  if (tab.startsWith('topic:')) return renderTopic(tab.slice(6));
+  if (tab === 'settings') return renderSettings();
+}
+
+/* ---- Oefenen ---- */
+function renderQuizHome() {
+  const due = S.questions.filter(q => (q.due || 0) <= Date.now()).length;
+  if (!S.apiKey) {
+    app.innerHTML = `<h1>Welkom 👋</h1>
+      <div class="card"><p>Stap 1: haal een gratis Gemini API-sleutel en plak die bij Instellingen.</p>
+      <p class="muted">Daarna voeg je notities toe en maakt de AI er vragen van.</p></div>
+      <button onclick="go('settings')">Naar instellingen</button>`;
+    return;
+  }
+  if (!S.questions.length) {
+    app.innerHTML = `<h1>Oefenen</h1><div class="card"><p>Nog geen vragen. Voeg je eigen notities toe of laat de AI een quiz maken over een onderwerp.</p></div>
+      <button onclick="go('add')">📝 Mijn notities toevoegen</button>
+      <button class="secondary" onclick="go('addai')">💡 Quiz over een onderwerp</button>`;
+    return;
+  }
+  const weak = weakConcepts().slice(0, 3);
+  app.innerHTML = `<h1>Oefenen</h1>
+    <div class="card"><div class="score" style="font-size:32px">${due}</div><p class="muted">vragen staan klaar om te herhalen</p></div>
+    <button onclick="startSession()">Start sessie (10 vragen)</button>
+    ${weak.length ? `<button class="secondary" onclick="startSession(null, true)">🎯 Train mijn zwakke punten</button>` : ''}
+    <button class="secondary" onclick="go('addai')">💡 Nieuwe quiz over een onderwerp</button>
+    <label>Of oefen één onderwerp</label>
+    <select id="topicSel"><option value="">— kies onderwerp —</option>${S.topics.map(t => `<option value="${t.id}">${esc(t.title)}</option>`).join('')}</select>
+    ${weak.length ? `<h2>Dit vind je nog lastig</h2>${weak.map(({ c, m }) => `
+      <div class="card topic" onclick="go('progress')"><div style="flex:1"><strong>${esc(c.label)}</strong>
+      <div class="muted">${esc(topicTitle(c.topicId))} · ${c.wrong}× fout</div>
+      <div class="bar"><div style="width:${Math.round(m * 100)}%;background:var(--bad)"></div></div></div></div>`).join('')}` : ''}`;
+  document.getElementById('topicSel').onchange = e => e.target.value && startSession(e.target.value);
+}
+const topicTitle = id => (S.topics.find(t => t.id === id) || {}).title || '';
+
+function startSession(topicId, weakOnly = false) {
+  const qs = pickSession(topicId || null, 10, weakOnly);
+  if (!qs.length) return toast(weakOnly ? 'Geen zwakke punten gevonden — goed bezig!' : 'Geen vragen gevonden.');
+  session = { queue: qs, i: 0, answered: null, right: 0, total: 0, missed: [], retried: new Set(), topicId, weakOnly };
+  tab = 'quiz'; render();
+}
+
+function renderQuestion() {
+  const s = session;
+  if (s.i >= s.queue.length) return renderSessionEnd();
+  const q = s.queue[s.i];
+  const topic = S.topics.find(t => t.id === q.topicId);
+  const a = s.answered;
+  app.innerHTML = `
+    <div class="row" style="margin-bottom:8px"><span class="muted">Vraag ${s.i + 1} / ${s.queue.length}</span>
+      <span style="text-align:right"><span class="pill">${esc(topic ? topic.title : '')}</span></span></div>
+    <div class="bar"><div style="width:${(s.i / s.queue.length) * 100}%"></div></div>
+    <div class="card"><p style="font-size:18px;font-weight:600">${esc(q.question)}</p></div>
+    ${q.options.map((o, i) => {
+      let cls = 'opt';
+      if (a !== null) { if (i === q.correctIndex) cls += ' correct'; else if (i === a) cls += ' wrong'; }
+      return `<button class="${cls}" ${a !== null ? 'disabled style="opacity:1"' : ''} onclick="answer(${i})">${esc(o)}</button>`;
+    }).join('')}
+    ${a !== null ? `<div class="feedback"><strong class="${a === q.correctIndex ? 'good' : 'bad'}">${a === q.correctIndex ? 'Goed!' : 'Helaas.'}</strong>
+      ${esc(q.explanation)}${q.concept ? `<div class="muted" style="margin-top:6px">Begrip: ${esc(q.concept)}</div>` : ''}</div>
+      <button style="margin-top:14px" onclick="nextQ()">Volgende</button>` : ''}
+    <button class="secondary" style="margin-top:24px" onclick="session=null;render()">Stoppen</button>`;
+}
+
+function answer(i) {
+  const s = session, q = s.queue[s.i];
+  if (s.answered !== null) return;
+  s.answered = i;
+  const ok = i === q.correctIndex;
+  // Alleen de eerste poging per sessie telt mee voor de score
+  if (!s.retried.has(q.id)) { s.total++; if (ok) s.right++; else s.missed.push(q); }
+  grade(q, ok);
+  // Fout? Dan komt de vraag aan het eind van de sessie nog één keer terug
+  if (!ok && !s.retried.has(q.id)) { s.retried.add(q.id); s.queue.push(q); }
+  render();
+}
+function nextQ() { session.i++; session.answered = null; render(); window.scrollTo(0, 0); }
+
+function renderSessionEnd() {
+  const s = session;
+  const pct = s.total ? Math.round(s.right / s.total * 100) : 0;
+  const improved = [...new Set(s.queue.filter(q => !s.missed.includes(q)).map(q => S.concepts[conceptKey(q)]).filter(c => c && c.wrong > 0 && c.streak >= 2))];
+  app.innerHTML = `<h1>Klaar! ${pct >= 80 ? '🎉' : pct >= 50 ? '💪' : '📖'}</h1>
+    <div class="card"><div class="score" style="font-size:32px">${s.right} / ${s.total}</div><p class="muted">in één keer goed</p></div>
+    ${improved.length ? `<div class="card"><strong class="good">Vooruitgang 📈</strong><p class="muted">Eerder lastig, nu goed: ${improved.slice(0, 5).map(c => esc(c.label)).join(', ')}</p></div>` : ''}
+    ${s.missed.length ? `<h2>Hier ging het mis</h2><div class="card"><ul>${[...new Set(s.missed.map(q => q.concept || q.question))].map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+    <div id="adapt"></div>
+    <button style="margin-top:14px" onclick="startSession(session.topicId, session.weakOnly)">Nog een sessie</button>
+    <button class="secondary" onclick="session=null;render()">Terug</button>`;
+  // Lerend vermogen: één keer per sessie, op de achtergrond
+  if (!s.adapted && s.missed.length) {
+    s.adapted = true;
+    const box = document.getElementById('adapt');
+    if (S.autoAdapt && S.apiKey && s.missed.some(q => { const c = S.concepts[conceptKey(q)]; return c && c.wrong >= 2 && c.wrong > (c.remedWrong || 0); })) {
+      box.innerHTML = `<div class="card"><div class="spinner"></div><p class="muted" style="text-align:center">🧠 Ik zie terugkerende fouten — ik maak nieuwe vragen om dit te trainen…</p></div>`;
+    }
+    autoAdapt(s.missed).then(done => {
+      s.adaptResult = done;
+      const el = document.getElementById('adapt'); if (!el) return;
+      el.innerHTML = done.map(d => d.error
+        ? `<div class="card"><p class="bad">Extra vragen maken lukte niet (${esc(d.error)})</p></div>`
+        : `<div class="card"><strong>🧠 Aangepast aan jou</strong><p class="muted">${esc(d.labels.join(', '))} ging vaker mis. Ik heb ${d.n} nieuwe vragen klaargezet die dit vanuit een andere hoek toetsen.</p></div>`).join('');
+    });
+  } else if (s.adaptResult) {
+    document.getElementById('adapt').innerHTML = s.adaptResult.filter(d => !d.error).map(d => `<div class="card"><strong>🧠 Aangepast aan jou</strong><p class="muted">${d.n} nieuwe vragen over: ${esc(d.labels.join(', '))}</p></div>`).join('');
+  }
+}
+
+async function genWeak(topicId, btn) {
+  const t = S.topics.find(x => x.id === topicId);
+  const concepts = weakConcepts(topicId).slice(0, 4).map(x => x.c);
+  btn.disabled = true; btn.textContent = 'Bezig met nieuwe vragen…';
+  try {
+    const n = await generateQuestions(t, concepts, 6);
+    concepts.forEach(c => { c.remedWrong = c.wrong; c.remedAt = Date.now(); }); save();
+    toast(`${n} nieuwe vragen toegevoegd over je zwakke punten.`); btn.textContent = `✓ ${n} vragen toegevoegd`;
+  } catch (e) { toast(e.message); btn.disabled = false; btn.textContent = 'Opnieuw proberen'; }
+}
+
+/* ---- Onderwerpen ---- */
+function renderTopics() {
+  app.innerHTML = `<h1>Onderwerpen</h1>
+    <button onclick="go('add')">📝 Mijn notities toevoegen</button>
+    <button class="secondary" onclick="go('addai')">💡 Quiz over een onderwerp</button>
+    ${S.topics.length ? S.topics.slice().reverse().map(t => { const s = topicStats(t.id); return `
+      <div class="card topic" onclick="go('topic:${t.id}')"><div style="flex:1"><strong>${esc(t.title)}</strong>
+        <div class="muted">${s.count} vragen · ${s.due} te herhalen</div>
+        <div class="bar"><div style="width:${Math.round(s.mastery * 100)}%"></div></div></div>
+        <div class="score">${Math.round(s.mastery * 100)}%</div></div>`; }).join('')
+      : `<p class="muted" style="margin-top:16px">Nog niets toegevoegd.</p>`}`;
+}
+
+function renderAdd(mode) {
+  const tabs = `<div class="row" style="margin-bottom:8px">
+    <button class="${mode === 'notes' ? '' : 'secondary'}" onclick="go('add')">📝 Mijn notities</button>
+    <button class="${mode === 'ai' ? '' : 'secondary'}" style="margin-top:0" onclick="go('addai')">💡 Onderwerp</button></div>`;
+  if (mode === 'ai') {
+    app.innerHTML = `<h1>Quiz over een onderwerp</h1>${tabs}
+      <label>Waarover wil je een quiz?</label><input id="subject" placeholder="bijv. ServiceNow CMDB, ITIL 4 incident vs problem, Scrum events…">
+      <label>Niveau</label><select id="level"><option>beginner</option><option selected>gemiddeld</option><option>gevorderd / examenniveau</option></select>
+      <label>Extra focus (optioneel)</label><textarea id="focus" style="min-height:90px" placeholder="bijv. 'voor het CSA-examen', 'vooral praktijkcases', 'ik ken de basis al'"></textarea>
+      <div style="margin-top:18px"><button id="go">Maak quiz ✨</button></div>
+      <div id="status"></div>`;
+    document.getElementById('go').onclick = submitSubject;
+    return;
+  }
+  app.innerHTML = `<h1>Notities toevoegen</h1>${tabs}
+    <label>Titel (optioneel)</label><input id="title" placeholder="bijv. ITIL 4 – Change Enablement">
+    <label>Plak je notities</label><textarea id="notes" placeholder="Plak hier tekst uit je samenvatting, Word, OneNote…"></textarea>
+    <label>…of kies een bestand (PDF, foto, .txt, .md)</label>
+    <input id="file" type="file" accept=".pdf,.txt,.md,image/*,application/pdf,text/plain,text/markdown">
+    <p class="muted">PDF's en foto's van aantekeningen leest de AI zelf uit. Max ~15 MB.</p>
+    <div style="margin-top:18px"><button id="go">Verwerk met AI ✨</button></div>
+    <div id="status"></div>
+    <button class="secondary" onclick="go('topics')">Annuleren</button>`;
+  document.getElementById('go').onclick = submitNotes;
+}
+
+function readFile(f) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    const isText = /^text\//.test(f.type) || /\.(txt|md)$/i.test(f.name);
+    r.onerror = () => reject(new Error('Bestand lezen mislukt'));
+    if (isText) { r.onload = () => resolve({ text: r.result }); r.readAsText(f); }
+    else { r.onload = () => resolve({ file: { type: f.type || 'application/pdf', data: String(r.result).split(',')[1] } }); r.readAsDataURL(f); }
+  });
+}
+
+async function submitNotes() {
+  const title = document.getElementById('title').value.trim();
+  let notes = document.getElementById('notes').value.trim();
+  const f = document.getElementById('file').files[0];
+  let file = null;
+  if (f) {
+    if (f.size > 15 * 1024 * 1024) return toast('Bestand is te groot (max ~15 MB).');
+    const r = await readFile(f);
+    if (r.text) notes = (notes ? notes + '\n\n' : '') + r.text; else file = r.file;
+  }
+  if (!notes && !file) return toast('Plak notities of kies een bestand.');
+  const btn = document.getElementById('go'); btn.disabled = true;
+  document.getElementById('status').innerHTML = `<div class="card"><div class="spinner"></div><p class="muted" style="text-align:center">AI leest je notities, vult aan en maakt vragen… (±20-60 sec)</p></div>`;
+  try {
+    const out = await processNotes(title, notes, file);
+    const topic = { id: uid(), title: title || out.title || 'Onderwerp', notes: notes || `(bestand: ${f ? f.name : ''})`,
+      summary: out.summary, keyPoints: out.keyPoints, enrichment: out.enrichment, createdAt: Date.now() };
+    S.topics.push(topic); save();
+    const n = addQuestions(topic.id, out.questions);
+    toast(`${n} vragen gemaakt!`);
+    go('topic:' + topic.id);
+  } catch (e) {
+    document.getElementById('status').innerHTML = `<div class="card bad">${esc(e.message)}</div>`;
+    btn.disabled = false;
+  }
+}
+
+async function submitSubject() {
+  const subject = document.getElementById('subject').value.trim();
+  const level = document.getElementById('level').value;
+  const focus = document.getElementById('focus').value.trim();
+  if (!subject) return toast('Vul een onderwerp in.');
+  const btn = document.getElementById('go'); btn.disabled = true;
+  document.getElementById('status').innerHTML = `<div class="card"><div class="spinner"></div><p class="muted" style="text-align:center">AI schrijft studiestof en vragen… (±20-60 sec)</p></div>`;
+  try {
+    const out = await processSubject(subject, level, focus);
+    const topic = { id: uid(), title: out.title || subject, source: 'ai', level,
+      notes: `Onderwerp: ${subject}. Niveau: ${level}. ${focus}`, summary: out.summary,
+      keyPoints: out.keyPoints, enrichment: out.enrichment, createdAt: Date.now() };
+    S.topics.push(topic); save();
+    const n = addQuestions(topic.id, out.questions);
+    toast(`${n} vragen gemaakt!`);
+    startSession(topic.id);
+  } catch (e) {
+    document.getElementById('status').innerHTML = `<div class="card bad">${esc(e.message)}</div>`;
+    btn.disabled = false;
+  }
+}
+
+function renderTopic(id) {
+  const t = S.topics.find(x => x.id === id);
+  if (!t) return go('topics');
+  const s = topicStats(id);
+  const weak = weakConcepts(id).slice(0, 5).map(x => ({ concept: x.c.label, wrong: x.c.wrong }));
+  app.innerHTML = `<h1>${esc(t.title)}</h1>
+    <div class="card row" style="text-align:center">
+      <div><div class="score">${s.count}</div><div class="muted">vragen</div></div>
+      <div><div class="score">${Math.round(s.mastery * 100)}%</div><div class="muted">beheersing</div></div>
+      <div><div class="score">${s.right + s.wrong ? Math.round(s.right / (s.right + s.wrong) * 100) : 0}%</div><div class="muted">goed</div></div>
+    </div>
+    <button onclick="startSession('${id}')">Oefen dit onderwerp</button>
+    ${weak.length ? `<button class="secondary" onclick="genWeak('${id}', this)">Extra vragen over zwakke punten</button>` : ''}
+    <button class="secondary" onclick="genMore('${id}', this)">Meer vragen maken</button>
+    ${weak.length ? `<h2>Zwakke punten</h2><div class="card"><ul>${weak.map(q => `<li>${esc(q.concept || q.question)} <span class="muted">(${q.wrong}× fout)</span></li>`).join('')}</ul></div>` : ''}
+    <h2>Samenvatting</h2><div class="card"><p>${esc(t.summary)}</p></div>
+    <h2>Kernpunten</h2><div class="card"><ul>${(t.keyPoints || []).map(k => `<li>${esc(k)}</li>`).join('')}</ul></div>
+    <h2>${t.source === 'ai' ? '💡 Voorbeelden & valkuilen' : '✨ Aangevuld door AI'}</h2><div class="card"><ul>${(t.enrichment || []).map(k => `<li>${esc(k)}</li>`).join('')}</ul>
+      <p class="muted">Check dit even tegen je studiemateriaal — AI kan zich vergissen.</p></div>
+    <button class="danger" style="margin-top:24px" onclick="delTopic('${id}')">Onderwerp verwijderen</button>`;
+}
+
+async function genMore(id, btn) {
+  btn.disabled = true; btn.textContent = 'Bezig…';
+  try { const n = await generateQuestions(S.topics.find(x => x.id === id)); toast(`${n} nieuwe vragen toegevoegd.`); render(); }
+  catch (e) { toast(e.message); btn.disabled = false; btn.textContent = 'Meer vragen maken'; }
+}
+function delTopic(id) {
+  if (!confirm('Onderwerp en alle vragen verwijderen?')) return;
+  S.topics = S.topics.filter(t => t.id !== id);
+  S.questions = S.questions.filter(q => q.topicId !== id);
+  for (const k in S.concepts) if (S.concepts[k].topicId === id) delete S.concepts[k];
+  save(); go('topics');
+}
+
+/* ---- Voortgang: je lerend profiel ---- */
+function renderProgress() {
+  const qs = S.questions;
+  const right = qs.reduce((s, q) => s + (q.right || 0), 0), wrong = qs.reduce((s, q) => s + (q.wrong || 0), 0);
+  const weak = weakConcepts().slice(0, 12);
+  const strong = strongConcepts().slice(0, 6);
+  app.innerHTML = `<h1>Voortgang</h1>
+    <div class="card row" style="text-align:center">
+      <div><div class="score">${right + wrong}</div><div class="muted">antwoorden</div></div>
+      <div><div class="score">${right + wrong ? Math.round(right / (right + wrong) * 100) : 0}%</div><div class="muted">goed</div></div>
+      <div><div class="score">${Object.keys(S.concepts).length}</div><div class="muted">begrippen</div></div>
+    </div>
+    <p class="muted">De app houdt per begrip bij hoe goed je het kent. Lastige begrippen komen vaker terug in je sessies${S.autoAdapt ? ', en na een sessie maakt de AI er automatisch nieuwe vragen over' : ''}.</p>
+    <h2>Dit vind je nog lastig</h2>
+    ${weak.length ? `<button onclick="startSession(null, true)">🎯 Train deze zwakke punten</button>` + weak.map(({ c, m }) => `
+      <div class="card"><div class="topic" style="cursor:default"><div style="flex:1"><strong>${esc(c.label)}</strong>
+        <div class="muted">${esc(topicTitle(c.topicId))} · ${c.right} goed / ${c.wrong} fout</div>
+        <div class="bar"><div style="width:${Math.round(m * 100)}%;background:var(--bad)"></div></div></div></div>
+        <div id="ex-${esc(c.key).replace(/[^a-z0-9]/gi, '')}">${c.explain ? `<div class="feedback">${esc(c.explain)}</div>` :
+          `<button class="secondary" style="margin-top:10px;padding:10px" onclick="showExplain('${encodeURIComponent(c.key)}', this)">Leg het me uit 💬</button>`}</div></div>`).join('')
+      : `<div class="card"><p class="muted">Nog geen zwakke punten gevonden. Oefen een paar sessies, dan verschijnen ze hier.</p></div>`}
+    ${strong.length ? `<h2>Hier ben je sterk in 💪</h2><div class="card"><ul>${strong.map(c => `<li>${esc(c.label)} <span class="muted">(${c.streak}× op rij goed)</span></li>`).join('')}</ul></div>` : ''}`;
+}
+
+async function showExplain(key, btn) {
+  const c = S.concepts[decodeURIComponent(key)]; if (!c) return;
+  btn.disabled = true; btn.textContent = 'Even denken…';
+  try { const txt = await explainConcept(c); btn.outerHTML = `<div class="feedback">${esc(txt)}</div>`; }
+  catch (e) { toast(e.message); btn.disabled = false; btn.textContent = 'Leg het me uit 💬'; }
+}
+
+/* ---- Instellingen ---- */
+function renderSettings() {
+  app.innerHTML = `<h1>Instellingen</h1>
+    <div class="card"><p><strong>Gratis AI-sleutel</strong></p>
+      <p class="muted">Ga naar <a style="color:var(--accent)" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>, log in met je Google-account en klik op "Create API key". Geen creditcard nodig.</p>
+      <label>Gemini API-sleutel</label><input id="key" type="password" value="${esc(S.apiKey)}" placeholder="AIza…" autocomplete="off">
+      <label>Model</label><input id="model" value="${esc(S.model)}" placeholder="${DEFAULT_MODEL}">
+      <p class="muted">Werkt het niet of loop je tegen limieten aan? Probeer gemini-2.5-flash-lite.</p>
+      <div style="margin-top:14px"><button id="saveKey">Opslaan</button></div>
+      <button class="secondary" id="testKey">Test verbinding</button></div>
+    <div class="card"><p><strong>Lerend vermogen</strong></p>
+      <label style="display:flex;gap:10px;align-items:center;color:var(--text)"><input id="auto" type="checkbox" style="width:auto" ${S.autoAdapt ? 'checked' : ''}>
+        Automatisch nieuwe vragen maken over begrippen die blijven misgaan</label>
+      <p class="muted">Kost 1 AI-verzoek na een sessie met terugkerende fouten.</p></div>
+    <div class="card"><p><strong>Back-up</strong></p>
+      <p class="muted">Alles staat alleen op dit toestel. Maak af en toe een back-up.</p>
+      <button class="secondary" id="exp">Back-up downloaden</button>
+      <label>Back-up terugzetten</label><input id="imp" type="file" accept=".json,application/json"></div>
+    <p class="muted">${S.topics.length} onderwerpen · ${S.questions.length} vragen</p>`;
+  const readForm = () => { S.apiKey = document.getElementById('key').value.trim(); S.model = document.getElementById('model').value.trim() || DEFAULT_MODEL; save(); };
+  document.getElementById('auto').onchange = e => { S.autoAdapt = e.target.checked; save(); toast(S.autoAdapt ? 'Lerend vermogen aan ✓' : 'Lerend vermogen uit'); };
+  document.getElementById('saveKey').onclick = () => { readForm(); toast('Opgeslagen ✓'); };
+  document.getElementById('testKey').onclick = async e => {
+    readForm(); e.target.disabled = true; e.target.textContent = 'Testen…';
+    try { await gemini([{ text: 'Antwoord met {"ok": true}' }], { type: 'OBJECT', properties: { ok: { type: 'BOOLEAN' } } }); toast('Verbinding werkt ✓'); }
+    catch (err) { toast(err.message); }
+    e.target.disabled = false; e.target.textContent = 'Test verbinding';
+  };
+  document.getElementById('exp').onclick = () => {
+    const data = JSON.stringify({ ...S, apiKey: '' }, null, 1);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
+    a.download = `quizmaatje-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+  };
+  document.getElementById('imp').onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const d = JSON.parse(await f.text());
+      if (!Array.isArray(d.topics) || !Array.isArray(d.questions)) throw new Error();
+      if (!confirm('Huidige gegevens vervangen door de back-up?')) return;
+      S = { ...blank(), ...d, apiKey: S.apiKey, model: S.model }; save(); toast('Back-up teruggezet ✓'); render();
+    } catch (err) { toast('Ongeldig back-upbestand.'); }
+  };
+}
+
+render();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
